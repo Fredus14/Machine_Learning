@@ -1,0 +1,331 @@
+---
+title: "Predictive Machine Learning Project"
+author: "Fabio Amaral"
+date: "19 February 2015"
+output: 
+  html_document:
+    highlight: espresso
+    theme: united
+    toc: yes
+---
+# Abstract 
+
+# Introduction  
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, we used data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways:
+
+A) Exactly according to the specification
+B) Throwing elbows to the front
+C) Lifting the dumbbell only halfway
+D) lowering the dumbbell only halfway
+E) throwing the hips to the front
+
+More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+## Objectives
+The goal of the project was to predict the manner in which the subjects did the exercise. This is the “classe” variable in the training set. Any of the other variables could be used to predict with. A report shoud be created describing how our model was built, how cross validation was used, what the expected out of sample error was, and why we made the model choices. We will also used our prediction model to predict 20 different test cases.
+
+# Prepare data set
+
+The  training data for this project are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+## Download and load data set
+The original training dataset contains 153 variables and 19622 boservations and the clean test set 153 variables and 20 observations.
+```{r download and load, cache=TRUE}
+# Download data
+trainUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+trainFile <- "./data/pml-training.csv"
+testFile  <- "./data/pml-testing.csv"
+
+if (!file.exists("./data")) {
+        dir.create("./data")
+}
+
+if (!file.exists(trainFile)) {
+        download.file(trainUrl, destfile=trainFile, method="curl")
+}
+
+if (!file.exists(testFile)) {
+        download.file(testUrl, destfile=testFile, method="curl")
+}
+
+# Load data and replace invalid strings and absent values for "NA"
+trainRaw <- read.csv("./data/pml-training.csv", na.strings=c("NA","NaN","#DIV/0!", ""))
+testRaw <- read.csv("./data/pml-testing.csv", na.strings=c("NA","NaN","#DIV/0!", ""))
+```
+
+
+## Clean data set
+After removing variables containing near zero variance, were missing values for over 60% of the observations were simply irrelevant for the assignment, the clean training dataset was left with 53 variables and 19622 observations and the clean test set 53 variables and 20 observations.
+```{r clean dataset, cache=TRUE}
+# Identify and remove irelevant variable for prediction
+#names(trainRaw)
+# Columns 1 to 7 will be removed
+removeVars <- grepl("^X|user|timestamp|window", names(trainRaw))
+trainRaw <- trainRaw[, !removeVars]
+
+# Removing zero covariates - Identify and remove predictors with near zero variance
+suppressPackageStartupMessages(require(caret))
+nzv <- nearZeroVar(trainRaw, saveMetrics=TRUE)
+nzv <- nearZeroVar(trainRaw)
+filteredTrain <- trainRaw[, -nzv]
+
+# Identify and remove predictors with 60% or more missing values
+cleanTrain <- filteredTrain[, colSums(is.na(filteredTrain)) <= 0.6*nrow(filteredTrain)] 
+
+# Repeat above process with test set
+
+# Columns 1 to 7 will be removed
+testRaw <- testRaw[, !removeVars]
+
+# Identify and remove predictors which were removed from training data
+filteredTest <- testRaw[, -nzv]
+
+# Identify and remove predictors with 60% or more missing values like done for training data
+cleanTest <- filteredTest[, colSums(is.na(filteredTest)) <= 0.6*nrow(filteredTest)] 
+```
+
+## Data Slicing
+The clean training data set was split in two parts, 60% for training and 40% for testing.
+
+```{r cleanup, cache=TRUE}
+set.seed(12345)
+inTrain <- createDataPartition(cleanTrain$classe, p=0.60, list=F)
+training <- cleanTrain[inTrain,] #60%
+testing <- cleanTrain[-inTrain,] #40%
+```
+
+# Exploratory Analysis of Predictor Correlation
+
+## Verification for Correlation of Predictors
+Firstly we perform an exploratory data analysis to assess for the correlation of predictors.
+```{r correlation of predictors, cache=TRUE}
+M <- abs(cor(training[,-53]))
+diag(M) <- 0
+which(M > 0.8, arr.ind=T) #which variables have greater correlation than 0.8
+```
+
+### Correlation Matrix
+As we can see from the results above and the correaltion matrix plot bellow there is not much correlation of predictors. This is not surprising since these are accelerometer data with measurements of different directions of movemnet. Given the low correlation of predictors they will all be used for model training.
+```{r correlation plot, cache=TRUE}
+suppressPackageStartupMessages(require(corrplot))
+corMatrix <- cor(training[, -53]) #Col 53 is the outcome label
+corrplot(corMatrix, order = "FPC", method="circle", tl.cex = 0.4,  tl.col = rgb(0, 0, 0))
+```
+
+# Predictive Modeling
+
+We tested several modelling algoriths with varied accuracy outcomes and processing times(**See appendix**).
+
+## Random forest
+The **Random Forest** method was chosen since it showed the **highest accuracy rate** and because of its robustness to correlated covariates and presence of outliers. We chose to use **10 fold cross validation** when applying the algorithm.  
+
+### Train by Random Forrest
+```{r train by RF, cache=TRUE}
+set.seed(12345)
+controlCV <- trainControl(method="cv")
+system.time(rf.Model <- train(classe ~., data=training, method="rf", trControl=controlCV))
+```
+
+### Random Forrest Modelling Parameters
+```{r rf parameters, cache=TRUE}
+rf.Model
+plot(rf.Model)
+```
+
+### Random Forrest Final Model
+```{r RF final model, cache=TRUE}
+rf.Model$finalModel
+plot(rf.Model$finalModel, main="Random Forrest Final Model \n Error rate vs n.Trees")
+legend("topright", legend = c("OOB", "A", "B", "C", "D", "E"), lty=(1:6), col = c(1:6))
+```
+
+The expected **level of accuracy** was above 98% and the **Out Of Bag Error Rate** was 0.93% as seen in the results and plots above determined by **Crossvalidation**. These results might be overestimated, so we performed validation to have better confidence in our results.
+
+### Evaluate Random Forest Model
+The performance of the predictive model is then tested on the validation datset
+```{r test RF, cache=TRUE}
+rf.predictions <- predict(rf.Model, testing)
+```
+
+### Confusion Matrix - Random Forrest
+```{r RF confusion matrix, cache=TRUE}
+confusionMatrix(rf.predictions, testing$classe)
+oose <- 1 - as.numeric(confusionMatrix(rf.predictions, testing$classe)$overall[1])
+oose
+```
+
+Our chosen model achieved the **accuracy of 99.3%** with **less than 0.7% Out Of Sample Error** 
+
+# Prediction on Test Set
+
+Finally the Random Forest trained model was applied on the testing data to make the 20 assigned predictions.
+
+```{r final predict, cache=TRUE}
+predict(rf.Model, cleanTest)
+```
+
+
+# Appendix - Modelling Algorithms Tested
+
+## Classification tree
+
+rpart - non-linear, use interactions between variables, data transformations are not so important
+
+### Train by Classification Tree
+```{r train class tree, cache=TRUE}
+suppressPackageStartupMessages(require(rpart))
+set.seed(12345)
+system.time(dt.Model <- train(classe ~ ., data=training, method="rpart"))
+```
+
+### Classification Tree Modeling Parameters
+```{r ct modeling, cache=TRUE}
+dt.Model
+```
+
+### Classification Tree Final Model
+```{r ct final model, cache=TRUE}
+dt.Model$finalModel
+```
+
+### Evaluate Classification Tree Model
+```{r test dt.Model, cache=TRUE}
+dt.predictions <- predict(dt.Model, testing)
+```
+
+### Confusion Matrix - Classification Tree
+```{r dt confusion matrix, cache=TRUE}
+confusionMatrix(dt.predictions, testing$classe)
+```
+
+### Plot the Classification Decision Tree
+```{r plot dt, cache=TRUE}
+rattle::fancyRpartPlot(dt.Model$finalModel, sub = "Classification Tree")
+```
+
+## Linear Discriminant Analysis
+Is a multivariate Gaussian with same covariances
+
+### Train by Linear Discriminant Analysis
+```{r lda train ,cache=TRUE}
+system.time(lda.Model <- train(training$classe ~., data=training, method="lda")) 
+```
+
+### Linear Discriminant Analysis Modelling Parameters
+```{r lda parameters, cache=TRUE}
+lda.Model
+```
+
+### Random Linear Discriminant Analysis Model
+```{r lda final model, cache=TRUE}
+lda.Model$finalModel
+```
+
+### Evaluate Linear Discriminant Analysis Model
+```{r test lda, cache=TRUE}
+lda.predictions <- predict(lda.Model, testing)
+```
+
+### Confusion Matrix - Linear Discriminant Analysis
+```{r lda confusion matrix, cache=TRUE}
+confusionMatrix(lda.predictions, testing$classe)
+```
+
+## Boosting (Stochastic Gradient Bosting)
+High accuracy, similar to random forrest
+Use gbm (boosting with trees), gamBoost (boosting generalized additive models)
+
+### Train by Boosting
+```{r train by boosting, cache=TRUE}
+suppressPackageStartupMessages(require(gbm))
+suppressPackageStartupMessages(require(survival))
+suppressPackageStartupMessages(require(splines))
+suppressPackageStartupMessages(require(parallel))
+system.time(gbm.Model <- train(classe ~., data=training, method="gbm", verbose=F)) 
+```
+
+### Boosting Modeling Parameters
+```{r boosting parameters, cache=TRUE}
+gbm.Model
+```
+
+### Boosting Final Model
+```{r gbm final model, cache=TRUE}
+gbm.Model$finalModel
+```
+
+### Evaluate Boosting Model
+```{r test boosting, cache=TRUE}
+gbm.predictions <- predict(gbm.Model, testing)
+```
+
+### Confusion Matrix - Boosting
+```{r Boosting confusion matrix, cache=TRUE}
+confusionMatrix(gbm.predictions, testing$classe)
+```
+
+## Bagging (Bootstrap aggregating)
+
+### Train by Bagging
+```{r train by Bagging, cache=TRUE}
+suppressPackageStartupMessages(require(ipred))
+suppressPackageStartupMessages(require(plyr))
+system.time(bg.Model <- train(classe ~., data=training, method="treebag", trControl=controlCV))
+```
+
+### Bagging Modeling Parameters
+```{r bagging parameter, cache=TRUE}
+bg.Model
+```
+
+### Bagging Final Model
+```{r Bagging final model, cache=TRUE}
+bg.Model$finalModel
+```
+
+### Evaluate Bagging Model
+```{r test bagging, cache=TRUE}
+bag.predictions <- predict(bg.Model, testing)
+```
+
+### Confusion Matrix - Bagging
+```{r bagging confusion matrix, cache=TRUE}
+confusionMatrix(bag.predictions, testing$classe)
+```
+
+# Submission to Coursera
+The code below rights the files for submission of the prediction assignment.
+```{r submission, cache=TRUE}
+rf.predictions <- as.character(predict(rf.Model, cleanTest))
+
+answers = rf.predictions
+
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+
+#getwd()
+setwd("/Users/pgstudent/Documents/Online_Courses/Data_Science/8-Predictive_Machine_Learning/Project/data")
+pml_write_files(answers)
+```
+
+
+# Analysis Environment
+
+The analysis was performed with the following system configuration:
+```{r system environment}
+# Display R session info
+sessionInfo()
+```
